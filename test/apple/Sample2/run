@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+
+rm -rf `pwd`/.build
+rm -rf `pwd`/.tmp
+xcodebuild clean build \
+    -sdk iphonesimulator \
+    -configuration Release \
+    SYMROOT=`pwd`/.tmp \
+    CONFIGURATION_BUILD_DIR=`pwd`/.build
