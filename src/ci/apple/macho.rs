@@ -1,39 +1,68 @@
-use super::common::CIResult;
-use super::common::UUID;
-use std::path;
+use std::path::Path;
+use std::path::PathBuf;
 use std::fs;
 use std::fmt;
+use serde::Serialize;
+use crate::common::CIResult;
+use crate::common::UUID;
+use crate::common::*;
+
+
+#[derive(Serialize, Debug)]
+#[derive(Clone)]
+pub struct File {
+    pub path: PathBuf,
+    pub bins: Vec<MachO>,
+}
 
 /// Mach-O binary information.
 /// - `uuid`: Build UUID. Not so much thing about this value is known.
-#[derive(Debug)]
+#[derive(Eq, PartialEq, PartialOrd, Hash)]
+#[derive(Clone, Copy)]
+#[derive(Serialize, Debug)]
 pub struct MachO {
     pub arch: Arch,
     pub uuid: UUID,
 }
 
+#[derive(Eq, PartialEq, PartialOrd, Hash)]
+#[derive(Clone, Copy)]
 #[derive(Debug)]
 pub struct Arch {
     pub cpu_type: u32,
     pub cpu_subtype: u32,
 }
 
-impl fmt::Display for MachO {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "arch: {}, uuid: {}", self.arch, self.uuid)
+/// Scans all executable files in an .app directory (or .ipa file). 
+/// - returns: All discovered UUIDs for all files.
+/// 
+/// .dSYM files are also in Mach-O format. 
+/// Therefore .dSYM files also can be scanned with this function.
+/// 
+pub fn scan_uuids(app: &Path) -> CIResult<Vec<File>> {
+    let mut result = Vec::<File>::new();
+    let pattern = app.to_str().ok_or(MissingError)?.appending("/**/*");
+    for entry in glob::glob(&pattern)? {
+        let path = entry?;
+        let machos = match scan_uuids_in_executable_file(&path) {
+            Err(_) => continue,
+            Ok(machos) => machos,
+        };
+        if !machos.is_empty() {
+            let file = File {
+                path: path,
+                bins: machos,
+            };
+            result.push(file);
+        }
     }
-}
-impl fmt::Display for Arch {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let s = goblin::mach::constants::cputype::get_arch_name_from_types(self.cpu_type, self.cpu_subtype).unwrap_or("<unknown>");
-        write!(f, "{}", s)
-    }
+    Ok(result)
 }
 
-pub fn scan_uuids(path: &path::Path) -> CIResult<Vec<MachO>> {
+fn scan_uuids_in_executable_file(exe: &Path) -> CIResult<Vec<MachO>> {
     use goblin::Object;
     use goblin::mach::Mach::*;
-    let content = fs::read(path)?;
+    let content = fs::read(exe)?;
     match Object::parse(&content[..])? {
         Object::Mach(Fat(mmach)) => scan_uuids_from_mmarch(&mmach),
         Object::Mach(Binary(macho)) => scan_uuids_from_macho(&macho),
@@ -90,16 +119,85 @@ fn scan_uuid_from_macho(macho: &goblin::mach::MachO) -> CIResult<MachO> {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+impl fmt::Display for MachO {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "arch: {}, uuid: {}", self.arch, self.uuid)
+    }
+}
+impl fmt::Display for Arch {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let s = goblin::mach::constants::cputype::get_arch_name_from_types(self.cpu_type, self.cpu_subtype).unwrap_or("<unknown>");
+        write!(f, "{}", s)
+    }
+}
+
+
+
+
+
+
+
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+impl serde::Serialize for Arch {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: serde::Serializer {
+        let s = goblin::mach::constants::cputype::get_arch_name_from_types(self.cpu_type, self.cpu_subtype).unwrap_or("<unknown>");
+        serializer.serialize_str(&s)
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 #[cfg(test)]
 #[cfg(target_os = "macos")]
 mod tests {
-    use super::super::common::*;
+    use super::super::super::common::*;
     use std::fs;
     use std::path::*;
 
     #[test]
     fn test_scanning_with_sample2() -> CIResult<()> {
-        let sample2 = root().to_owned().appending("test").appending("apple").appending("sample2");
+        let sample2 = root().expect("cannot find srcroot").appending("test").appending("apple").appending("sample2");
         assert_eq!(sample2.exists(), true, "missing `sample2` directory.");
 
         let tmproot = sample2.appending(".tmp");
@@ -113,7 +211,7 @@ mod tests {
         assert_eq!(out.status.success(), true, "{:?}", out);
         {
             let appbin = sample2.appending(".build/Sample2.app/Sample2");
-            let specs = super::scan_uuids(&appbin)?;
+            let specs = super::scan_uuids_in_executable_file(&appbin)?;
             assert_eq!(specs.len(), 2);
             assert_eq!(specs[0].arch.cpu_type, goblin::mach::constants::cputype::CPU_TYPE_X86_64);
             assert_eq!(specs[0].uuid, UUID::with([
@@ -130,7 +228,9 @@ mod tests {
         fs::remove_dir_all(&prodroot)?;
         Ok(())   
     }
-    fn root() -> &'static Path {
-        Path::new(file!()).parent().unwrap().parent().unwrap().parent().unwrap()
+    fn root() -> Option<PathBuf> {
+        let p = Path::new(file!()).parent()?.parent()?.parent()?.parent()?.to_path_buf();
+        Some(p)
     }
 }
+
