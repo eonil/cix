@@ -91,6 +91,7 @@ fn scan_uuid_from_macho(macho: &goblin::mach::MachO) -> CIResult<MachO> {
 
 
 #[cfg(test)]
+#[cfg(target_os = "macos")]
 mod tests {
     use super::super::common::*;
     use std::fs;
@@ -100,7 +101,7 @@ mod tests {
     fn test_scanning_with_sample2() -> CIResult<()> {
         let sample2 = root().to_owned().appending("test").appending("apple").appending("sample2");
         assert_eq!(sample2.exists(), true, "missing `sample2` directory.");
-        
+
         let tmproot = sample2.appending(".tmp");
         let prodroot = sample2.appending(".build");
         if tmproot.exists() { fs::remove_dir_all(&tmproot)? }
