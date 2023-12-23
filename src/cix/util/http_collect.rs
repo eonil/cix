@@ -47,33 +47,49 @@ async fn http_collect(collect_port: u16, replay_port: u16) -> ci::Result<()> {
     Ok(())
 }
 
-async fn collect(port:u16, msgx: &MutexMessageVec) -> ci::Result<()> {
-    let listen = TCPListener::bind(([0,0,0,0],port))?;
-    loop {
-        let (mut chan, addr): (TCPStream, net::SocketAddr) = listen.accept().await?;
-        chan.write_all(b"HTTP 200 OK\r\nContent-Length: 0\r\n\r\n").await?;
-        chan.flush().await?;
-        let mut msg = Vec::<u8>::new();
-        chan.read_to_end(&mut msg).await?;
-        chan.close().await?;
-        msgx.lock().unwrap().push(msg);
-        println!("collected from {}", addr);
+async fn collect(port:u16, msgx: &MutexMessageVec) {
+    match collect(port, msgx).await {
+        Err(x) => eprintln!("ERR: {}", x),
+        Ok(_) => return,
+    };
+    async fn collect(port:u16, msgx: &MutexMessageVec) -> ci::Result<()> {
+        let listen = TCPListener::bind(([0,0,0,0],port))?;
+        loop {
+            let (mut chan, addr): (TCPStream, net::SocketAddr) = listen.accept().await?;
+            chan.write_all(b"HTTP 200 OK\r\nContent-Length: 0\r\n\r\n").await?;
+            chan.flush().await?;
+            let mut msg = Vec::<u8>::new();
+            chan.read_to_end(&mut msg).await?;
+            chan.close().await?;
+            msgx.lock().unwrap().push(msg);
+            println!("collected from {}", addr);
+        }
     }
 }
 
-async fn replay(port:u16, msgx: &MutexMessageVec) -> ci::Result<()> {
-    let listen = TCPListener::bind(([0,0,0,0],port))?;
-    loop {
-        let (mut chan, addr): (TCPStream, net::SocketAddr) = listen.accept().await?;
-        let msgs = msgx.lock().unwrap();
-        let len = msgs.iter().map(|msg| msg.len()).sum::<usize>();
-        let head = format!("HTTP 200 OK\r\nContent-Length: {}\r\n\r\n", len);
-        chan.write_all(head.as_bytes()).await?;
-        for msg in msgs.iter() {
-            chan.write_all(msg).await?;
-        }
-        chan.flush().await?;
-        chan.close().await?;
-        println!("scattered to {}", addr);
+async fn replay(port:u16, msgx: &MutexMessageVec) {
+    match core(port, msgx).await {
+        Err(x) => eprintln!("ERR: {}", x),
+        Ok(_) => return,
     }
+    async fn core(port:u16, msgx: &MutexMessageVec) -> ci::Result<()> {
+        let listen = TCPListener::bind(([0,0,0,0],port))?;
+        loop {
+            let (mut chan, addr): (TCPStream, net::SocketAddr) = listen.accept().await?;
+            let msgs = msgx.lock().unwrap();
+            let len = msgs.iter().map(|msg| msg.len()).sum::<usize>();
+            let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", len);
+            chan.write_all(head.as_bytes()).await?;
+            let mut c = 0usize;
+            for msg in msgs.iter() {
+                chan.write_all(msg).await?;
+                c += msg.len();
+                println!("print {}/{}", c, len);
+                // tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            chan.write_all("\r\n".as_bytes()).await?;
+            chan.flush().await?;
+            println!("scattered to {}", addr);
+        }
+    };
 }
